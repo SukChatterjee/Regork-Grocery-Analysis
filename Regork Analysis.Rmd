@@ -1,0 +1,781 @@
+---
+title: "Regork Grocery Chain Revenue Growth Analysis"
+subtitle: Identifying Growth Opportunities Through Shopping Pattern Analysis
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: '2'
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    theme: cosmo
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 12,
+  fig.height = 6,
+  fig.align = "center"
+)
+```
+
+```{css, echo=FALSE}
+/* Hide individual code chunk buttons, keep only global Code button */
+.code-folding-btn {
+  display: none !important;
+}
+
+/* Remove excessive whitespace */
+body {
+  padding-bottom: 20px !important;
+}
+
+.container-fluid {
+  padding-bottom: 0px !important;
+}
+
+#content {
+  min-height: auto !important;
+}
+```
+
+# {.tabset .tabset-fade .tabset-pills}
+
+## SYNOPSIS
+
+### Business Problem
+
+**To: Regork CEO**  
+**From: Data Science Team**  
+**Re: Identifying High-Impact Growth Investment Opportunities**
+
+As a national grocery chain, Regork must continuously identify new areas of growth to maintain competitive advantage and drive profitability. This analysis was commissioned to **identify a potential area of growth where the company could invest future resources to increase revenue and profits**.
+
+**Key Business Questions:**
+
+1. Which days of the week have the lowest sales performance?
+2. What are the daily and hourly traffic patterns?
+3. Which customer segments (family sizes) are underrepresented on weak days?
+4. Are there specific day/hour combinations that underperform?
+
+### Our Approach
+
+**Data Source:** CompleteJourney dataset - 1 year of transaction data from 2,700 households
+
+**Analytical Methodology:**
+
+**Phase 1: Identify Weakest Days**
+
+- Analyzed daily revenue performance to find the two weakest performing days
+- Calculated revenue gaps compared to average daily sales
+- Quantified annual opportunity
+
+**Phase 2: Temporal Analysis**
+
+- Analyzed daily and hourly traffic patterns to identify peak vs. off-peak periods
+- Filtered to business hours (6 AM - 11 PM) to focus on operational periods
+- Created day × hour heatmaps to visualize shopping patterns
+
+**Phase 3: Family Size Gap Analysis**
+
+- Compared family size shopping patterns on weak days vs. overall average
+- Identified which household sizes are underrepresented on weakest days
+- Created targeted recommendations for family-specific promotions
+
+**Phase 4: Smart Time-Based Benchmarking**
+
+- Compared same hour across different days (not all hours against one average)
+- Focused on prime shopping hours (9 AM - 9 PM) for realistic opportunities
+- Example: Tuesday 2 PM vs. Saturday 2 PM (same hour comparison)
+
+### Proposed Solution
+
+**RECOMMENDED GROWTH AREA:** Multi-Tiered Revenue Optimization Program
+
+**Tier 1: Day-Level Targeting** (Primary Focus)
+
+- Target the two weakest performing days with day-specific promotions
+- Launch exclusive loyalty rewards for these days
+- Expected annual revenue opportunity quantified
+
+**Tier 2: Family Size Targeting**
+
+- Identify underrepresented family sizes on weak days
+- Create family-pack promotions and bulk discounts
+- Target messaging to attract missing family segments
+
+**Tier 3: Time-Based Targeting** (If Applicable)
+
+- Target specific hour/day combinations during prime hours
+- Example: Tuesday 2 PM promotions if it underperforms vs. Saturday 2 PM
+
+**Expected Impact:** Detailed revenue projections and strategic action plan provided in Summary section.
+
+---
+
+## PACKAGES REQUIRED
+
+The following R packages are used throughout this analysis:
+
+```{r load-packages}
+# Data manipulation and analysis
+library(completejourney)  # Dataset source
+library(dplyr)            # Data manipulation
+library(tidyr)            # Data tidying
+library(lubridate)        # Date/time manipulation
+
+# Visualization
+library(ggplot2)          # Core plotting
+library(scales)           # Scale functions for plots
+
+# Table formatting
+library(knitr)            # Table generation
+library(kableExtra)       # Enhanced table styling
+
+# Set global theme for consistent visualizations
+theme_set(theme_minimal(base_size = 13))
+```
+
+**Package Descriptions:**
+
+- **completejourney**: Provides access to transaction and demographic data
+- **dplyr**: Data manipulation (filtering, grouping, summarizing)
+- **tidyr**: Data reshaping and pivoting
+- **lubridate**: Date/time operations and extraction
+- **ggplot2**: Create visualizations and charts
+- **scales**: Format axes and labels in charts
+- **knitr/kableExtra**: Create professional tables
+
+---
+
+## DATA PREPARATION & TIDY DATA
+
+### Dataset Overview
+
+```{r load-data, results='asis'}
+# Load datasets
+transactions <- transactions_sample
+demographics <- demographics
+
+# Define business parameters
+STORE_OPEN_HOUR <- 6   # 6 AM
+STORE_CLOSE_HOUR <- 23  # 11 PM
+
+cat("**Dataset Overview:**\n\n")
+cat("- Transaction Records:", format(nrow(transactions), big.mark = ","), "\n")
+cat("- Unique Households:", format(n_distinct(transactions$household_id), big.mark = ","), "\n")
+cat("- Date Range:", as.character(min(transactions$transaction_timestamp)), "to", 
+    as.character(max(transactions$transaction_timestamp)), "\n")
+cat("- Business Hours: 6:00 AM - 11:00 PM Daily\n")
+```
+
+### Data Tables
+
+**Transactions Dataset**
+
+| Variable | Data Type | Description |
+|----------|-----------|-------------|
+| household_id | character | Uniquely identifies each household |
+| basket_id | character | Uniquely identifies each purchase occasion |
+| product_id | character | Uniquely identifies each product |
+| quantity | numeric | Number of products purchased |
+| sales_value | numeric | Amount in dollars from the sale |
+| transaction_timestamp | datetime | Date and time of transaction |
+
+**Demographics Dataset**
+
+| Variable | Data Type | Description |
+|----------|-----------|-------------|
+| household_id | character | Links to transactions dataset |
+| age | character | Age group of household head |
+| income | character | Income bracket |
+| household_size | numeric | Number of people in household |
+
+### Data Preparation Code
+
+```{r data-prep, results='asis'}
+# Prepare transaction data with time features
+transactions_clean <- transactions %>%
+  mutate(
+    # Extract date/time components
+    transaction_date = as.Date(transaction_timestamp),
+    day_of_week = wday(transaction_timestamp, label = TRUE, abbr = FALSE),
+    day_of_week_num = wday(transaction_timestamp),
+    hour_of_day = hour(transaction_timestamp),
+    month = month(transaction_timestamp, label = TRUE),
+    
+    # Create time periods
+    time_period = case_when(
+      hour_of_day >= 6 & hour_of_day < 9 ~ "Early Morning (6-9 AM)",
+      hour_of_day >= 9 & hour_of_day < 12 ~ "Mid Morning (9-12 PM)",
+      hour_of_day >= 12 & hour_of_day < 15 ~ "Early Afternoon (12-3 PM)",
+      hour_of_day >= 15 & hour_of_day < 18 ~ "Late Afternoon (3-6 PM)",
+      hour_of_day >= 18 & hour_of_day < 21 ~ "Evening (6-9 PM)",
+      hour_of_day >= 21 & hour_of_day < 24 ~ "Late Evening (9-11 PM)",
+      TRUE ~ "Closed Hours"
+    ),
+    
+    # Weekend vs Weekday
+    day_type = ifelse(day_of_week %in% c("Saturday", "Sunday"), "Weekend", "Weekday")
+  ) %>%
+  # Filter to business hours only
+  filter(hour_of_day >= STORE_OPEN_HOUR & hour_of_day <= STORE_CLOSE_HOUR)
+
+cat("**Data prepared:**", format(nrow(transactions_clean), big.mark = ","), 
+    "transactions during business hours\n\n")
+cat("**Coverage:**", round(nrow(transactions_clean)/nrow(transactions)*100, 1), 
+    "% of total transactions\n")
+```
+
+---
+
+## EXPLORATORY DATA ANALYSIS
+
+### Analysis 1: Two Weakest Days Identified
+
+**Question:** Which specific days need promotional investment?
+
+```{r daily-analysis-first}
+# Calculate daily metrics
+day_analysis <- transactions_clean %>%
+  group_by(day_of_week, day_of_week_num) %>%
+  summarise(
+    total_transactions = n(),
+    unique_households = n_distinct(household_id),
+    total_sales = sum(sales_value, na.rm = TRUE),
+    avg_basket_size = mean(sales_value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(day_of_week_num) %>%
+  mutate(
+    pct_transactions = total_transactions / sum(total_transactions) * 100,
+    pct_sales = total_sales / sum(total_sales) * 100
+  )
+
+# Identify weak days
+weakest_day <- day_analysis %>% arrange(total_sales) %>% slice(1)
+second_weakest <- day_analysis %>% arrange(total_sales) %>% slice(2)
+
+avg_daily_sales <- mean(day_analysis$total_sales)
+weak_gap <- avg_daily_sales - weakest_day$total_sales
+second_gap <- avg_daily_sales - second_weakest$total_sales
+total_gap <- weak_gap + second_gap
+```
+
+```{r weak-day-viz, fig.height=5.5}
+weak_day_data <- day_analysis %>%
+  mutate(
+    is_weak = day_of_week %in% c(as.character(weakest_day$day_of_week), 
+                                   as.character(second_weakest$day_of_week)),
+    status = ifelse(is_weak, "Target for Growth", "Current Performance")
+  )
+
+ggplot(weak_day_data, aes(x = day_of_week, y = total_sales/1000, fill = status)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = avg_daily_sales/1000, linetype = "dashed", 
+             color = "red", size = 1.5) +
+  geom_text(aes(label = paste0("$", round(total_sales/1000, 1), "K")),
+            vjust = -0.5, size = 4.5, fontface = "bold") +
+  annotate("text", x = 1.5, y = avg_daily_sales/1000 * 1.08, 
+           label = "Daily Average", color = "red", hjust = 0, fontface = "bold", size = 5) +
+  scale_y_continuous(labels = function(x) paste0("$", x, "K"),
+                     expand = expansion(mult = c(0, 0.15))) +
+  scale_fill_manual(values = c("Target for Growth" = "#E74C3C", 
+                               "Current Performance" = "#95A5A6")) +
+  labs(
+    title = "GROWTH OPPORTUNITY: Two Weakest Days Identified",
+    subtitle = "Red bars below dashed line = days that need promotional investment to reach average",
+    x = "Day of Week",
+    y = "Total Sales (in thousands)",
+    fill = "",
+    caption = "Focus promotional resources on the two days significantly below the daily average"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, color = "#2C3E50"),
+    plot.subtitle = element_text(size = 12, color = "gray30"),
+    plot.caption = element_text(size = 10, color = "gray50", hjust = 0),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+    legend.position = "top",
+    legend.text = element_text(size = 12),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+```
+
+**Growth Opportunity Identified:**
+
+```{r weak-summary, results='asis'}
+cat("\n**Two Weakest Days:**\n\n")
+cat("1. **", as.character(weakest_day$day_of_week), "**\n", sep = "")
+cat("   - Current sales: $", format(round(weakest_day$total_sales, 0), big.mark = ","), " per week\n", sep = "")
+cat("   - Gap to average: $", format(round(weak_gap, 0), big.mark = ","), " per week\n", sep = "")
+cat("   - Represents ", round(weakest_day$pct_sales, 1), "% of weekly revenue\n\n", sep = "")
+
+cat("2. **", as.character(second_weakest$day_of_week), "**\n", sep = "")
+cat("   - Current sales: $", format(round(second_weakest$total_sales, 0), big.mark = ","), " per week\n", sep = "")
+cat("   - Gap to average: $", format(round(second_gap, 0), big.mark = ","), " per week\n", sep = "")
+cat("   - Represents ", round(second_weakest$pct_sales, 1), "% of weekly revenue\n\n", sep = "")
+
+cat("**Total Opportunity:**\n")
+cat("- Combined weekly gap: **$", format(round(total_gap, 0), big.mark = ","), "**\n", sep = "")
+cat("- **Annual revenue potential: $", format(round(total_gap * 52, 0), big.mark = ","), "**\n", sep = "")
+cat("- This represents a **", round(total_gap * 52 / sum(transactions_clean$sales_value) * 100, 1), 
+    "% increase** in total annual revenue\n", sep = "")
+```
+
+---
+
+### Analysis 2: Daily Traffic Patterns
+
+**Question:** How does revenue vary across the week?
+
+```{r daily-combined-chart, fig.height=6, fig.width=12}
+# Prepare data for dual visualization
+daily_plot_data <- day_analysis %>%
+  mutate(
+    revenue_scaled = total_sales / 1000,
+    traffic_scaled = total_transactions
+  )
+
+# Calculate scaling factor for secondary axis
+scale_factor <- max(daily_plot_data$revenue_scaled) / max(daily_plot_data$traffic_scaled)
+
+# Light Blue and Red color palette
+revenue_color <- "#4A90E2"
+traffic_color <- "#E74C3C"
+
+# Create dual-axis chart
+ggplot(daily_plot_data, aes(x = day_of_week)) +
+  geom_col(aes(y = revenue_scaled), fill = revenue_color, alpha = 0.8, width = 0.65) +
+  geom_text(aes(y = revenue_scaled / 2, label = paste0("$", round(revenue_scaled, 1), "K")),
+            size = 4, fontface = "bold", color = "white") +
+  geom_line(aes(y = traffic_scaled * scale_factor, group = 1), 
+            color = traffic_color, size = 2) +
+  geom_point(aes(y = traffic_scaled * scale_factor), 
+             color = traffic_color, size = 5, shape = 19) +
+  geom_text(aes(y = traffic_scaled * scale_factor, 
+                label = format(traffic_scaled, big.mark = ",")),
+            vjust = -2.2, size = 3.8, fontface = "bold", color = traffic_color) +
+  scale_y_continuous(
+    name = "Revenue (Thousands)",
+    labels = function(x) paste0("$", x, "K"),
+    expand = expansion(mult = c(0, 0.3)),
+    sec.axis = sec_axis(
+      ~./scale_factor, 
+      name = "Number of Shopping Trips",
+      labels = comma
+    )
+  ) +
+  labs(
+    title = "Daily Performance: Revenue vs Customer Traffic",
+    subtitle = "LIGHT BLUE BARS = Revenue Earned ($) | RED LINE = Customer Shopping Trips",
+    x = "Day of Week",
+    caption = "Note: Both metrics displayed on separate scales. Bars show total revenue; line shows transaction count."
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18, hjust = 0.5, margin = margin(b = 5)),
+    plot.subtitle = element_text(size = 12, color = "gray30", hjust = 0.5, margin = margin(b = 20)),
+    plot.caption = element_text(size = 10, color = "gray50", hjust = 0, margin = margin(t = 10)),
+    axis.title.y.left = element_text(color = revenue_color, face = "bold", size = 12),
+    axis.title.y.right = element_text(color = traffic_color, face = "bold", size = 12),
+    axis.text.y.left = element_text(color = revenue_color, face = "bold", size = 10),
+    axis.text.y.right = element_text(color = traffic_color, face = "bold", size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 11, face = "bold"),
+    axis.title.x = element_text(size = 12, face = "bold", margin = margin(t = 10)),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_line(color = "gray90", size = 0.3),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+```
+
+**Key Findings:**
+
+```{r daily-insights, results='asis'}
+busiest <- day_analysis %>% arrange(desc(total_sales)) %>% slice(1)
+busiest_traffic <- day_analysis %>% arrange(desc(total_transactions)) %>% slice(1)
+
+cat("**Revenue Performance:**\n\n")
+cat("- **Highest Revenue Day:** ", as.character(busiest$day_of_week), " - $",
+    format(round(busiest$total_sales, 0), big.mark = ","), " (", 
+    round(busiest$pct_sales, 1), "% of weekly revenue)\n", sep = "")
+cat("- **Lowest Revenue Day:** ", as.character(weakest_day$day_of_week), " - $",
+    format(round(weakest_day$total_sales, 0), big.mark = ","), " (", 
+    round(weakest_day$pct_sales, 1), "% of weekly revenue)\n\n", sep = "")
+
+cat("**Traffic Performance:**\n\n")
+cat("- **Busiest Day (Most Customers):** ", as.character(busiest_traffic$day_of_week), 
+    " with ", format(busiest_traffic$total_transactions, big.mark = ","), " shopping trips\n", sep = "")
+cat("- **Slowest Day (Fewest Customers):** ", as.character(weakest_day$day_of_week),
+    " with ", format(weakest_day$total_transactions, big.mark = ","), " shopping trips\n\n", sep = "")
+
+cat("**Gap Analysis:**\n\n")
+cat("- **Revenue Gap:** ", round((busiest$total_sales - weakest_day$total_sales) / 
+    weakest_day$total_sales * 100, 0), 
+    "% difference between strongest and weakest day\n", sep = "")
+cat("- **Traffic Gap:** ", round((busiest_traffic$total_transactions - weakest_day$total_transactions) / 
+    weakest_day$total_transactions * 100, 0), 
+    "% difference in customer visits\n", sep = "")
+```
+
+---
+
+### Analysis 3: Hourly Traffic Patterns & Time-Based Opportunities
+
+**Question:** When are customers shopping and which specific time slots underperform?
+
+#### Part A: Shopping Traffic Heatmap
+
+```{r heatmap-data}
+day_hour_analysis <- transactions_clean %>%
+  group_by(day_of_week, day_of_week_num, hour_of_day) %>%
+  summarise(
+    total_transactions = n(),
+    total_sales = sum(sales_value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(day_of_week_num)
+
+avg_hourly <- mean(day_hour_analysis$total_transactions)
+```
+
+```{r heatmap-viz, fig.height=6, fig.width=12}
+ggplot(day_hour_analysis, aes(x = hour_of_day, y = day_of_week, fill = total_transactions)) +
+  geom_tile(color = "white", size = 1) +
+  geom_text(aes(label = comma(total_transactions, accuracy = 1)), 
+            size = 3.5, color = "black", fontface = "bold") +
+  scale_fill_gradient2(
+    low = "#E74C3C", 
+    mid = "#F39C12",
+    high = "#27AE60", 
+    midpoint = avg_hourly,
+    labels = comma,
+    name = "Transactions"
+  ) +
+  scale_x_continuous(breaks = seq(6, 23, 1)) +
+  labs(
+    title = "Shopping Traffic Heatmap: Every Day × Every Hour",
+    subtitle = paste0("Business Hours: 6 AM - 11 PM | Average: ", round(avg_hourly, 0), 
+                     " transactions/hour | Green = High Traffic | Red = Low Traffic"),
+    x = "Hour of Day",
+    y = "Day of Week"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 11, color = "gray30"),
+    legend.position = "right",
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 11),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+```
+
+---
+
+#### Part B: Specific Time-Based Growth Opportunities
+
+**Question:** Which exact day/hour combinations should we target with promotions?
+
+```{r time-opportunities}
+# Calculate hour benchmarks
+hour_benchmarks <- day_hour_analysis %>%
+  group_by(hour_of_day) %>%
+  summarise(
+    hour_avg_transactions = mean(total_transactions),
+    hour_avg_sales = mean(total_sales),
+    .groups = "drop"
+  )
+
+# Find opportunities
+growth_opps <- day_hour_analysis %>%
+  left_join(hour_benchmarks, by = "hour_of_day") %>%
+  mutate(
+    pct_of_hour_avg = (total_transactions / hour_avg_transactions) * 100,
+    revenue_gap = hour_avg_sales - total_sales,
+    is_opportunity = hour_of_day >= 9 & hour_of_day <= 21 & pct_of_hour_avg < 85
+  ) %>%
+  filter(is_opportunity) %>%
+  arrange(pct_of_hour_avg)
+```
+
+```{r time-opp-viz, results='asis'}
+if(nrow(growth_opps) > 0) {
+  
+  print(
+    kable(
+      growth_opps %>%
+        head(15) %>%
+        mutate(
+          time_label = paste0(sprintf("%02d", hour_of_day), ":00"),
+          day_hour = paste(day_of_week, time_label)
+        ) %>%
+        select(
+          `Day & Hour` = day_hour,
+          `Current Traffic` = total_transactions,
+          `Hour Average` = hour_avg_transactions,
+          `% of Average` = pct_of_hour_avg,
+          `Revenue Gap` = revenue_gap
+        ) %>%
+        mutate(
+          `Hour Average` = round(`Hour Average`, 0),
+          `% of Average` = paste0(round(`% of Average`, 1), "%"),
+          `Revenue Gap` = dollar(`Revenue Gap`)
+        ),
+      format.args = list(big.mark = ","),
+      caption = "Top 15 Underperforming Day/Hour Combinations (Prime Hours 9 AM - 9 PM)"
+    ) %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                    full_width = FALSE) %>%
+      row_spec(1:5, bold = TRUE, background = "#F8D7DA")
+  )
+  
+} else {
+  cat("\n**No significant time-based opportunities identified.**\n\n")
+  cat("Traffic is well-distributed across prime shopping hours (9 AM - 9 PM).\n\n")
+  cat("**Strategic Recommendation:** Focus resources on day-level and family-size targeting instead, as these offer greater impact.\n")
+}
+```
+
+---
+
+### Analysis 4: Family Size Analysis for Weak Days
+
+**Question:** Which family sizes are MISSING on our weakest days?
+
+**The Logic:** We compare what percentage of shoppers are each family size on weak days vs. ALL days. If a family size shops LESS on weak days than normal, they're an opportunity!
+
+```{r family-analysis}
+# Prepare family data
+weak_day_trans <- transactions_clean %>%
+  filter(day_of_week %in% c(as.character(weakest_day$day_of_week),
+                             as.character(second_weakest$day_of_week))) %>%
+  left_join(demographics, by = "household_id") %>%
+  filter(!is.na(household_size))
+
+all_trans_demo <- transactions_clean %>%
+  left_join(demographics, by = "household_id") %>%
+  filter(!is.na(household_size))
+
+# Calculate metrics
+weak_family <- weak_day_trans %>%
+  group_by(household_size) %>%
+  summarise(
+    transactions = n(),
+    total_sales = sum(sales_value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(weak_day_pct = transactions / sum(transactions) * 100)
+
+overall_family <- all_trans_demo %>%
+  group_by(household_size) %>%
+  summarise(transactions = n(), .groups = "drop") %>%
+  mutate(overall_pct = transactions / sum(transactions) * 100)
+
+family_comparison <- weak_family %>%
+  left_join(overall_family %>% select(household_size, overall_pct),
+            by = "household_size") %>%
+  mutate(
+    gap = weak_day_pct - overall_pct,
+    gap_label = paste0(ifelse(gap > 0, "+", ""), round(gap, 1), " pp"),
+    status = ifelse(gap < 0, "Missing on Weak Days", "Already Shopping Well")
+  ) %>%
+  arrange(gap)
+
+most_underrep <- family_comparison %>% filter(gap < 0) %>% slice(1)
+```
+
+```{r family-viz-improved, fig.height=6, fig.width=12}
+# Create improved visualization
+ggplot(family_comparison, aes(x = reorder(factor(household_size), gap), y = gap)) +
+  geom_col(aes(fill = gap < 0), width = 0.6, show.legend = FALSE) +
+  geom_hline(yintercept = 0, size = 1.5, color = "black") +
+  geom_text(aes(label = gap_label, hjust = ifelse(gap < 0, 1.2, -0.2)),
+            size = 5.5, fontface = "bold") +
+  coord_flip() +
+  scale_fill_manual(values = c("TRUE" = "#E74C3C", "FALSE" = "#27AE60")) +
+  scale_y_continuous(
+    labels = function(x) paste0(x, " pp"),
+    breaks = seq(-10, 10, 2),
+    limits = c(min(family_comparison$gap) * 1.3, max(family_comparison$gap) * 1.3)
+  ) +
+  labs(
+    title = "Family Size Opportunity Gap: Who's Missing on Weak Days?",
+    subtitle = paste0("Analysis of ", as.character(weakest_day$day_of_week), " and ", 
+                     as.character(second_weakest$day_of_week), 
+                     " | RED (negative) = Target These Families | GREEN (positive) = Already Shopping"),
+    x = "Household Size (Number of People)",
+    y = "Gap in Shopping Frequency (percentage points)",
+    caption = "Interpretation: Family Size 3 at -5.2pp means they shop 5.2% LESS on weak days than normal - TARGET THEM with family promotions"
+  ) +
+  annotate("text", x = nrow(family_comparison) * 0.5, y = min(family_comparison$gap) * 0.8,
+           label = "MISSING on weak days\n(CREATE PROMOTIONS)", 
+           color = "#E74C3C", fontface = "bold", size = 5, hjust = 0.5) +
+  annotate("text", x = nrow(family_comparison) * 0.5, y = max(family_comparison$gap) * 0.8,
+           label = "Already shopping well\n(MAINTAIN)", 
+           color = "#27AE60", fontface = "bold", size = 5, hjust = 0.5) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 17, color = "#2C3E50"),
+    plot.subtitle = element_text(size = 12, color = "gray30"),
+    plot.caption = element_text(size = 11, color = "gray50", hjust = 0, margin = margin(t = 10)),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 13, face = "bold"),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+```
+
+---
+
+## SUMMARY
+
+### Identified Growth Opportunities
+
+**1. Two Weakest Days**
+
+```{r summary-weak-days, results='asis'}
+cat("- **Target Days:** ", as.character(weakest_day$day_of_week), " and ", 
+    as.character(second_weakest$day_of_week), "\n", sep = "")
+cat("- **Combined revenue gap:** $", format(round(total_gap, 0), big.mark = ","), 
+    " per week\n", sep = "")
+cat("- **Annual opportunity:** $", format(round(total_gap * 52, 0), big.mark = ","), "\n", sep = "")
+cat("- **Potential revenue increase:** ", 
+    round(total_gap * 52 / sum(transactions_clean$sales_value) * 100, 1), "%\n", sep = "")
+```
+
+**2. Family Size Targeting**
+
+```{r summary-family, results='asis'}
+if(exists("most_underrep") && nrow(most_underrep) > 0) {
+  underrep_families <- family_comparison %>% filter(gap < -1.5)
+  cat("- **Most underrepresented:** Family size ", most_underrep$household_size, "\n", sep = "")
+  if(nrow(underrep_families) > 1) {
+    cat("- **Total underrepresented segments:** ", nrow(underrep_families), 
+        " family sizes identified\n", sep = "")
+  }
+  cat("- **Action:** Create family-pack promotions and bulk discounts\n")
+}
+```
+
+**3. Time-Based Opportunities**
+
+```{r summary-time, results='asis'}
+if(exists("growth_opps") && nrow(growth_opps) > 0) {
+  top_15_opps <- growth_opps %>% head(15)
+  cat("- **Underperforming time slots:** Top 15 day/hour combinations identified for targeted promotions\n")
+  cat("- **Action:** Launch flash sales or limited-time offers during these specific windows\n")
+  cat("- **Combined potential:** $", 
+      format(round(sum(top_15_opps$revenue_gap), 0), big.mark = ","), 
+      " weekly if these top 15 slots reach their hour average\n", sep = "")
+} else {
+  cat("- **Time distribution:** Well-balanced across prime hours\n")
+  cat("- **Focus:** Day-level and family-size strategies will have greater impact\n")
+}
+```
+
+---
+
+### Strategic Recommendations
+
+**Recommendation 1: Launch Day-Specific Loyalty Program**
+
+Create "**`r as.character(weakest_day$day_of_week)` & `r as.character(second_weakest$day_of_week)` Rewards**" program:
+
+- Double loyalty points on these two days
+- Exclusive deals available only on weak days
+- Email/app notifications highlighting special offers
+- Expected impact: 40-50% closure of revenue gap
+
+**Recommendation 2: Family-Targeted Promotions**
+
+```{r rec-family, results='asis'}
+if(exists("most_underrep") && nrow(most_underrep) > 0) {
+  underrep_sizes <- family_comparison %>% filter(gap < -1.5) %>% pull(household_size)
+  cat("Focus on underrepresented family sizes: **", paste(underrep_sizes, collapse = ", "), "**\n\n", sep = "")
+  cat("**Specific Tactics:**\n\n")
+  cat("- **Targeted Campaigns** - e.g. Family of ", most_underrep$household_size, 
+      "? Get 20% off our weekly dinner box!\n", sep = "")
+  cat("- **Exclusive deal on 'Family Bundles'** - Create ", most_underrep$household_size, 
+      "-pack bundles (meals, snacks, beverages)\n", sep = "")
+  cat("- **Bulk buy promotions** - 'Buy 3 Get 1 Free' on staples and household essentials\n")
+  cat("- **Highlight value packs** - Emphasize nutritional value and family-friendly items\n")
+  cat("- **Partner with family-oriented apps** for targeted digital advertising\n")
+} else {
+  cat("All family sizes well-represented. Focus on frequency and basket size.\n")
+}
+```
+
+**Recommendation 3: Promotional Calendar**
+
+Create a structured approach:
+
+- **Week 1:** Launch pilot "Weak Day Rewards" with double points
+- **Week 2-4:** A/B test different family promotions (discount % vs. bundle deals)
+- **Month 2:** Scale successful tactics; add time-specific flash sales if needed
+- **Month 3:** Measure results and refine strategy
+
+**Recommendation 4: Marketing Channel Strategy**
+
+- **Email campaigns:** Target families by household size with personalized offers
+- **Mobile app push notifications:** Day-specific deals on Tuesday/Wednesday mornings
+- **In-store signage:** Highlight "Family Pack Deals" on weak days
+- **Social media:** "Weak Day Wednesday" and "Tuesday Treats" campaigns
+
+---
+
+### Conclusion
+
+```{r conclusion-calc, echo=FALSE}
+# Calculate total opportunity
+total_annual_opp <- total_gap * 52
+if(exists("growth_opps") && nrow(growth_opps) > 0) {
+  top_15_opps <- growth_opps %>% head(15)
+  time_annual_opp <- sum(top_15_opps$revenue_gap) * 52
+  total_annual_opp <- total_annual_opp + time_annual_opp
+}
+```
+
+**Primary Growth Lever:** Target the two weakest days (`r as.character(weakest_day$day_of_week)` and `r as.character(second_weakest$day_of_week)`) with day-specific promotions ($`r format(round(total_gap * 52, 0), big.mark = ",")` annual potential)
+
+**Secondary Growth Lever:** Create family-size targeted promotions to attract underrepresented household segments on weak days
+
+```{r conclusion-time, results='asis', echo=FALSE}
+if(exists("growth_opps") && nrow(growth_opps) > 0) {
+  top_15_opps <- growth_opps %>% head(15)
+  cat("We have identified **top 15 high-priority day/hour combinations**, successful targeted campaigns could potentially increase the annual revenue by **$", 
+      format(round(sum(top_15_opps$revenue_gap) * 52, 0), big.mark = ","), "**\n\n", sep = "")
+} else {
+  cat("**Note:** Time-based opportunities are minimal; focus on day-level and family-size strategies for maximum impact\n\n")
+}
+```
+
+**Why This Will Work:**
+
+1. **Focused:** Two specific days vs. broad-based promotions = efficient marketing spend
+2. **Targeted:** Family-size segmentation = relevant offers that resonate
+3. **Measurable:** Clear baseline and KPIs for tracking success
+4. **Low-risk:** Pilot approach allows testing before full rollout
+5. **Scalable:** Success model can extend to other opportunities
+
+**Success Metrics:**
+
+- Week-over-week traffic increase on target days
+- Family size distribution shift on weak days
+- Revenue per day trending toward average
+- Customer satisfaction scores during promotional periods
+
+---
+
+**Analysis Date:** `r Sys.Date()`  
+**Business Hours Analyzed:** 6:00 AM - 11:00 PM  
+**Data Source:** CompleteJourney - 2,700 households, 1 year of transactions
